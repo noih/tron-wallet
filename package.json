@@ -1,0 +1,34 @@
+{
+  "name": "tron-wallet",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "packageManager": "yarn@4.10.3",
+  "scripts": {
+    "build": "tsc --project ./tsconfig.build.json && tsc-alias -p ./tsconfig.build.json",
+    "start": "yarn run build && cross-env NODE_ENV=production TZ=Asia/Taipei node ./dist/index.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@stylistic/eslint-plugin": "^5.4.0",
+    "@tsconfig/node22": "^22.0.2",
+    "@types/node": "^24.8.1",
+    "@typescript-eslint/parser": "^8.46.1",
+    "cross-env": "^10.1.0",
+    "eslint": "^9.37.0",
+    "eslint-import-resolver-alias": "^1.1.2",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-perfectionist": "^4.15.1",
+    "globals": "^16.4.0",
+    "tsc-alias": "^1.8.16",
+    "tsconfig-paths": "^4.2.0",
+    "typescript-eslint": "^8.46.1"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "dotenv": "^17.2.3",
+    "tronweb": "^6.0.4",
+    "typescript": "^5.9.3"
+  }
+}
