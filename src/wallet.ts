@@ -7,46 +7,44 @@ import type { WalletInfo, BalanceInfo, Network } from './types.js'
 import config from './config.js'
 
 export default class Wallet {
-  private tronWeb: TronWeb
-  private network: Network
-  private walletFile: string
-
   private static readonly USDT_CONTRACTS: Record<Network, string> = {
-    mainnet: config.network.mainnet || 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
-    shasta: config.network.shasta || 'TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs',
-    nile: config.network.nile || ''
+    mainnet: config.usdtContracts.mainnet,
+    shasta: config.usdtContracts.shasta,
+    nile: config.usdtContracts.nile
   }
 
-  constructor(
-    network: Network = 'shasta',
-    walletDir = './wallets'
-  ) {
-    this.network = network
-    this.walletFile = path.join(walletDir, `wallet-${network}.json`)
+  private static readonly TRON_HOSTS: Record<Network, string> = {
+    mainnet: 'https://api.trongrid.io',
+    nile: 'https://nile.trongrid.io',
+    shasta: 'https://api.shasta.trongrid.io'
+  }
 
-    const hosts: Record<Network, string> = {
-      mainnet: 'https://api.trongrid.io',
-      nile: 'https://nile.trongrid.io',
-      shasta: 'https://api.shasta.trongrid.io'
-    }
+  private static getTronWeb(network: Network): TronWeb {
+    return new TronWeb({ fullHost: Wallet.TRON_HOSTS[network] })
+  }
 
-    this.tronWeb = new TronWeb({ fullHost: hosts[network] })
-
+  static listWallets(walletDir: string): string[] {
     if (!fs.existsSync(walletDir)) {
-      fs.mkdirSync(walletDir, { recursive: true })
+      return []
     }
+
+    return fs
+      .readdirSync(walletDir)
+      .filter((file) => file.endsWith('.json') && !file.match(/\.bk\d*$/))
   }
 
-  load(): WalletInfo | null {
-    if (!fs.existsSync(this.walletFile)) {
+  static loadWallet(walletDir: string, filename: string): WalletInfo | null {
+    const filePath = path.join(walletDir, filename)
+
+    if (!fs.existsSync(filePath)) {
       return null
     }
 
-    const data = fs.readFileSync(this.walletFile, 'utf-8')
+    const data = fs.readFileSync(filePath, 'utf-8')
     return JSON.parse(data)
   }
 
-  private saveWallet(wallet: WalletInfo, filePath: string): void {
+  private static saveWallet(wallet: WalletInfo, filePath: string) {
     if (fs.existsSync(filePath)) {
       const existingData = fs.readFileSync(filePath, 'utf-8')
       const existingWallet: WalletInfo = JSON.parse(existingData)
@@ -57,35 +55,68 @@ export default class Wallet {
         && existingWallet.network === wallet.network
 
       if (!isSameWallet) {
-        let backupFile = `${filePath}.bk`
-        let counter = 2
+        let counter = 1
+        let backupFile = `${filePath}.bk${counter}`
 
         while (fs.existsSync(backupFile)) {
-          backupFile = `${filePath}.bk${counter}`
           counter++
+          backupFile = `${filePath}.bk${counter}`
         }
 
         fs.renameSync(filePath, backupFile)
       }
     }
 
-    fs.writeFileSync(
+    return fs.writeFileSync(
       filePath,
-      JSON.stringify({
-        ...wallet,
-        lastUpdated: new Date().toISOString()
-      }, null, 2),
+      JSON.stringify({ ...wallet, lastUpdated: new Date().toISOString() }, null, 2),
       'utf-8'
     )
   }
 
-  async verifyUsdtContract(): Promise<{
+  static async createWallet(
+    walletDir: string,
+    network: Network,
+    name: string
+  ): Promise<{ wallet: WalletInfo, filename: string }> {
+    // Ensure wallet directory exists
+    if (!fs.existsSync(walletDir)) {
+      fs.mkdirSync(walletDir, { recursive: true })
+    }
+
+    const tronWeb = Wallet.getTronWeb(network)
+    const account = await tronWeb.createAccount()
+
+    const wallet: WalletInfo = {
+      address: account.address.base58,
+      privateKey: account.privateKey,
+      publicKey: account.publicKey,
+      network,
+      createdAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString()
+    }
+
+    const filename = `${name}-${network}.json`
+    const walletFile = path.join(walletDir, filename)
+    Wallet.saveWallet(wallet, walletFile)
+
+    return { wallet, filename }
+  }
+
+  static async verifyUsdtContract(address: string, network: Network): Promise<{
     name: string
     symbol: string
     decimals: number
   }> {
-    const usdtContract = Wallet.USDT_CONTRACTS[this.network]
-    const contract = await this.tronWeb.contract().at(usdtContract)
+    const tronWeb = Wallet.getTronWeb(network)
+    const usdtContract = Wallet.USDT_CONTRACTS[network]
+
+    if (!usdtContract) {
+      throw new Error(`USDT contract address not configured for ${network}. Please set ${network.toUpperCase()}_USDT_CONTRACT in .env file`)
+    }
+
+    tronWeb.setAddress(address)
+    const contract = await tronWeb.contract().at(usdtContract)
 
     const name = await contract.name().call()
     const symbol = await contract.symbol().call()
@@ -98,105 +129,93 @@ export default class Wallet {
     }
   }
 
-  async create(): Promise<WalletInfo> {
-    const account = await this.tronWeb.createAccount()
-
-    const walletInfo: WalletInfo = {
-      address: account.address.base58,
-      privateKey: account.privateKey,
-      publicKey: account.publicKey,
-      network: this.network,
-      createdAt: new Date().toISOString(),
-      lastUpdated: new Date().toISOString()
-    }
-
-    this.saveWallet(walletInfo, this.walletFile)
-
-    return walletInfo
-  }
-
-  async getTRXBalance(address: string): Promise<string> {
-    const balance = await this.tronWeb.trx.getBalance(address)
-    const result = this.tronWeb.fromSun(balance)
+  static async getTRXBalance(address: string, network: Network): Promise<string> {
+    const tronWeb = Wallet.getTronWeb(network)
+    const balance = await tronWeb.trx.getBalance(address)
+    const result = tronWeb.fromSun(balance)
     return typeof result === 'string' ? result : result.toString()
   }
 
-  async getUSDTBalance(address: string): Promise<string> {
-    const usdtContract = Wallet.USDT_CONTRACTS[this.network]
+  static async getUSDTBalance(address: string, network: Network): Promise<string> {
+    const tronWeb = Wallet.getTronWeb(network)
+    const usdtContract = Wallet.USDT_CONTRACTS[network]
 
-    this.tronWeb.setAddress(address)
-    const contract = await this.tronWeb.contract().at(usdtContract)
+    if (!usdtContract) {
+      throw new Error(`USDT contract address not configured for ${network}. Please set ${network.toUpperCase()}_USDT_CONTRACT in .env file`)
+    }
+
+    tronWeb.setAddress(address)
+    const contract = await tronWeb.contract().at(usdtContract)
     const balance = await contract.balanceOf(address).call()
-    return (this.tronWeb.toDecimal(balance) / 1e6).toString()
+    return (tronWeb.toDecimal(balance) / 1e6).toString()
   }
 
-  async getBalances(address: string): Promise<BalanceInfo> {
+  static async getBalances(walletInfo: WalletInfo): Promise<BalanceInfo> {
     const [trx, usdt] = await Promise.all([
-      this.getTRXBalance(address),
-      this.getUSDTBalance(address)
+      Wallet.getTRXBalance(walletInfo.address, walletInfo.network),
+      Wallet.getUSDTBalance(walletInfo.address, walletInfo.network)
     ])
 
     return { trx, usdt }
   }
 
-  isValidAddress(address: string): boolean {
-    return this.tronWeb.isAddress(address)
+  static isValidAddress(address: string): boolean {
+    // Use mainnet TronWeb instance for validation
+    const tronWeb = Wallet.getTronWeb('mainnet')
+    return tronWeb.isAddress(address)
   }
 
-  getFaucetUrl(): string {
+  static getFaucetUrl(network: Network): string {
     const urls = {
       nile: 'https://nileex.io/join/getJoinPage',
       shasta: 'https://www.trongrid.io/shasta',
       mainnet: 'No faucet on mainnet, you need to purchase real TRX'
     }
-    return urls[this.network]
+    return urls[network]
   }
 
-  getExplorerUrl(address?: string): string {
+  static getExplorerUrl(address: string, network: Network): string {
     const explorers = {
       mainnet: 'https://tronscan.org',
       nile: 'https://nile.tronscan.org',
       shasta: 'https://shasta.tronscan.org'
     }
 
-    const baseUrl = explorers[this.network]
-    return address ? `${baseUrl}/#/address/${address}` : baseUrl
+    return `${explorers[network]}/#/address/${address}`
   }
 
-  getUsdtContractAddress(): string | undefined {
-    return Wallet.USDT_CONTRACTS[this.network]
-  }
-
-  getNetwork(): string {
-    return this.network
-  }
-
-  async transferTRX(
-    fromPrivateKey: string,
+  static async transferTRX(
+    walletInfo: WalletInfo,
     toAddress: string,
     amount: string
   ): Promise<string> {
-    this.tronWeb.setPrivateKey(fromPrivateKey)
+    const tronWeb = Wallet.getTronWeb(walletInfo.network)
+    tronWeb.setPrivateKey(walletInfo.privateKey)
 
-    const transaction = await this.tronWeb.trx.sendTransaction(
+    const transaction = await tronWeb.trx.sendTransaction(
       toAddress,
-      Number(this.tronWeb.toSun(Number(amount)))
+      Number(tronWeb.toSun(Number(amount)))
     )
 
     return transaction.txid
   }
 
-  async transferUSDT(
-    fromPrivateKey: string,
+  static async transferUSDT(
+    walletInfo: WalletInfo,
     toAddress: string,
     amount: string
   ): Promise<string> {
-    const usdtContract = Wallet.USDT_CONTRACTS[this.network]
+    const tronWeb = Wallet.getTronWeb(walletInfo.network)
+    const usdtContract = Wallet.USDT_CONTRACTS[walletInfo.network]
 
-    this.tronWeb.setPrivateKey(fromPrivateKey)
-    const contract = await this.tronWeb.contract().at(usdtContract)
+    if (!usdtContract) {
+      throw new Error(`USDT contract address not configured for ${walletInfo.network}. Please set ${walletInfo.network.toUpperCase()}_USDT_CONTRACT in .env file`)
+    }
 
-    const amountInSun = this.tronWeb.toBigNumber(amount).multipliedBy(1e6)
+    tronWeb.setPrivateKey(walletInfo.privateKey)
+    const contract = await tronWeb.contract().at(usdtContract)
+
+    const amountInSun = tronWeb.toBigNumber(amount).multipliedBy(1e6)
     const transaction = await contract.transfer(
       toAddress,
       amountInSun

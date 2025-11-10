@@ -63,6 +63,7 @@ export default [
       'no-bitwise': 'off',
       'no-console': 'off',
       'no-continue': 'off',
+      'no-else-return': 'warn',
       'no-empty': 'warn',
       'no-empty-pattern': 'warn',
       'no-fallthrough': 'warn',
